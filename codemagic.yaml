@@ -6,7 +6,7 @@ workflows:
     max_build_duration: 60
 
     scripts:
-      - name: Extract nested packages
+      - name: Extract nested ZIP packages
         script: |
           set -e
           mkdir -p extracted
@@ -18,13 +18,13 @@ workflows:
               mkdir -p "$dest"
               unzip -o "$z" -d "$dest"
               mv "$z" "$z.processed"
-            done < <(find extracted -type f -name '*.zip' ! -name '*.processed' -print0)
+            done < <(find extracted -type f -name '*.zip' -print0)
           done
 
-          echo "Gradle project files:"
+          echo "Located Gradle projects:"
           find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print
 
-      - name: Fix Java compatibility
+      - name: Align Java and Kotlin targets
         script: |
           set -e
           python3 <<'PY'
@@ -35,28 +35,32 @@ workflows:
           files += list(Path("extracted").rglob("app/build.gradle.kts"))
 
           if not files:
-              raise SystemExit("ERROR: app/build.gradle or app/build.gradle.kts was not found.")
+              raise SystemExit("ERROR: app/build.gradle was not found.")
 
           for p in files:
               s = p.read_text()
-              print("Checking:", p)
+              print("Fixing Java target in", p)
 
-              # Update existing Java compatibility settings to Java 17.
+              # Convert older Java targets to Java 17.
               s = re.sub(
-                  r'(sourceCompatibility\s*=?\s*)JavaVersion\.VERSION_1_8',
-                  r'\1JavaVersion.VERSION_17', s
-              )
-              s = re.sub(
-                  r'(targetCompatibility\s*=?\s*)JavaVersion\.VERSION_1_8',
-                  r'\1JavaVersion.VERSION_17', s
+                  r'JavaVersion\.VERSION_1_[6789]',
+                  'JavaVersion.VERSION_17',
+                  s
               )
 
-              # If compileOptions is missing, add it inside android { }.
+              # Update string-based Kotlin JVM targets.
+              s = re.sub(
+                  r'(jvmTarget\s*=\s*)["\'](?:1\.[6789]|17)["\']',
+                  r'\1"17"',
+                  s
+              )
+
+              # Add Java 17 options if the Android block lacks them.
               if not re.search(r'\bcompileOptions\s*\{', s):
                   m = re.search(r'\bandroid\s*\{', s)
                   if not m:
-                      raise SystemExit(f"ERROR: No android block in {p}")
-                  pos = m.end()
+                      raise SystemExit(f"ERROR: android block missing in {p}")
+
                   if p.name.endswith(".kts"):
                       block = """
               compileOptions {
@@ -71,28 +75,21 @@ workflows:
                   targetCompatibility JavaVersion.VERSION_17
               }
           """
-                  s = s[:pos] + block + s[pos:]
-
-              # Kotlin DSL/Groovy: update common Kotlin JVM target 1.8 to 17.
-              s = re.sub(
-                  r'jvmTarget\s*=\s*["\']1\.8["\']',
-                  'jvmTarget = "17"', s
-              )
-              s = re.sub(
-                  r'jvmTarget\s*=\s*["\']17["\']',
-                  'jvmTarget = "17"', s
-              )
+                  s = s[:m.end()] + block + s[m.end():]
 
               p.write_text(s)
-              print("Updated:", p)
 
-          print("Java compatibility patch complete.")
+          print("Java compatibility updates complete.")
           PY
 
       - name: Build debug APK
         script: |
           set -e
-          PROJECT_FILE=$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
+
+          PROJECT_FILE=$(find extracted -type f \( \
+            -name settings.gradle -o \
+            -name settings.gradle.kts \
+          \) | head -n 1)
 
           if [ -z "$PROJECT_FILE" ]; then
             echo "ERROR: Gradle settings file not found."
@@ -103,13 +100,16 @@ workflows:
           PROJECT_DIR=$(dirname "$PROJECT_FILE")
           echo "Building project at: $PROJECT_DIR"
           cd "$PROJECT_DIR"
+
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
 
           if [ -f gradlew ]; then
             chmod +x gradlew
             ./gradlew --no-daemon assembleDebug
           else
-            /tmp/gradle-8.9/bin/gradle --no-daemon assembleDebug
+            curl -fL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o gradle.zip
+            unzip -q gradle.zip -d .
+            ./gradle-8.9/bin/gradle --no-daemon assembleDebug
           fi
 
     artifacts:
