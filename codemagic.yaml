@@ -6,16 +6,55 @@ workflows:
     max_build_duration: 60
 
     scripts:
-      - name: Inspect launcher ZIP
+      - name: Extract nested packages
         script: |
           set -e
-          echo "Repository files:"
-          find . -maxdepth 3 -type f | head -100
-          echo "ZIP files:"
-          find . -type f -name '*.zip'
-          echo "ZIP contents:"
-          unzip -l EmeraldRPLauncher_GitHub_Build.zip | head -100
+          mkdir -p extracted
+          unzip -o EmeraldRPLauncher_GitHub_Build.zip -d extracted
+
+          for depth in 1 2 3 4; do
+            find extracted -type f -name '*.zip' -print0 |
+            while IFS= read -r -d '' z; do
+              dest="${z%.zip}_contents"
+              mkdir -p "$dest"
+              unzip -o "$z" -d "$dest"
+              mv "$z" "$z.processed"
+            done
+          done
+
+          echo "Searching for Gradle project:"
+          find extracted -type f \( \
+            -name settings.gradle -o \
+            -name settings.gradle.kts \
+          \) -print
+
+      - name: Build debug APK
+        script: |
+          set -e
+          PROJECT_FILE=$(find extracted -type f \( \
+            -name settings.gradle -o \
+            -name settings.gradle.kts \
+          \) | head -n 1)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "No Gradle project found. Check the package contents."
+            find extracted -maxdepth 5 -type f | head -200
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          cd "$PROJECT_DIR"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon assembleDebug
+          else
+            curl -L https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /tmp
+            /tmp/gradle-8.9/bin/gradle --no-daemon assembleDebug
+          fi
 
     artifacts:
-      - EmeraldRPLauncher_GitHub_Build.zip
+      - extracted/**/build/outputs/apk/**/*.apk
       
