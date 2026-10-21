@@ -1,0 +1,58 @@
+name: Emerald Android APK Build
+
+'on':
+workflow_dispatch:
+
+permissions:
+contents: read
+
+jobs:
+build:
+name: Build Emerald RP Launcher
+runs-on: ubuntu-24.04
+
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
+
+  - name: Set up Java
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
+
+  - name: Set up Android SDK
+    uses: android-actions/setup-android@v4
+
+  - name: Install Android SDK packages
+    run: |
+      sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+      yes | sdkmanager --licenses
+
+  - name: Verify launcher ZIP
+    run: |
+      test -f EmeraldRPLauncher_GitHub_Build.zip || {
+        echo "ERROR: EmeraldRPLauncher_GitHub_Build.zip is missing from the repository root."
+        exit 1
+      }
+
+  - name: Extract launcher source
+    run: |
+      unzip -o EmeraldRPLauncher_GitHub_Build.zip -d source
+
+  - name: Install Gradle
+    run: |
+      curl -fL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle.zip
+      unzip -q /tmp/gradle.zip -d /tmp
+      echo "/tmp/gradle-8.9/bin" >> "$GITHUB_PATH"
+
+  - name: Build APK
+    working-directory: source
+    run: gradle --no-daemon assembleDebug
+
+  - name: Upload APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: EmeraldRP-Android-APK
+      path: source/app/build/outputs/apk/debug/app-debug.apk
+      if-no-files-found: error
