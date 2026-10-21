@@ -1,9 +1,11 @@
 name: Emerald RP APK Builder
 
-on:
+'on':
 workflow_dispatch:
 push:
-branches: [main, master]
+branches:
+- main
+- master
 
 permissions:
 contents: read
@@ -20,7 +22,7 @@ steps:
     uses: actions/setup-java@v4
     with:
       distribution: temurin
-      java-version: "17"
+      java-version: '17'
 
   - name: Set up Android SDK
     uses: android-actions/setup-android@v4
