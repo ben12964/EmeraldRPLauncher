@@ -1,0 +1,38 @@
+
+workflows:
+  emerald-android:
+    name: Emerald RP Android APK
+    instance_type: linux_x2
+    max_build_duration: 60
+
+    scripts:
+      - name: Extract launcher project
+        script: |
+          set -e
+          unzip -o EmeraldRPLauncher_GitHub_Build.zip -d extracted
+          echo "Files extracted:"
+          find extracted -maxdepth 3 -type f | head -80
+
+      - name: Build debug APK
+        script: |
+          set -e
+          PROJECT_DIR=$(find extracted -name settings.gradle -o -name settings.gradle.kts | head -1 | xargs dirname)
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "Could not find Gradle project in ZIP."
+            exit 1
+          fi
+          cd "$PROJECT_DIR"
+          if [ -f local.properties ]; then rm local.properties; fi
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon assembleDebug
+          else
+            curl -L https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /tmp
+            /tmp/gradle-8.9/bin/gradle --no-daemon assembleDebug
+          fi
+
+    artifacts:
+      - extracted/**/build/outputs/apk/**/*.apk
+      
