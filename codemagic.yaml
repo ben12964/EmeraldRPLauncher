@@ -13,36 +13,95 @@ workflows:
           unzip -o EmeraldRPLauncher_GitHub_Build.zip -d extracted
 
           for depth in 1 2 3 4; do
-            find extracted -type f -name '*.zip' -print0 |
             while IFS= read -r -d '' z; do
               dest="${z%.zip}_contents"
               mkdir -p "$dest"
               unzip -o "$z" -d "$dest"
               mv "$z" "$z.processed"
-            done
+            done < <(find extracted -type f -name '*.zip' ! -name '*.processed' -print0)
           done
 
-          echo "Searching for Gradle project:"
-          find extracted -type f \( \
-            -name settings.gradle -o \
-            -name settings.gradle.kts \
-          \) -print
+          echo "Gradle project files:"
+          find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print
+
+      - name: Fix Java compatibility
+        script: |
+          set -e
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          files = list(Path("extracted").rglob("app/build.gradle"))
+          files += list(Path("extracted").rglob("app/build.gradle.kts"))
+
+          if not files:
+              raise SystemExit("ERROR: app/build.gradle or app/build.gradle.kts was not found.")
+
+          for p in files:
+              s = p.read_text()
+              print("Checking:", p)
+
+              # Update existing Java compatibility settings to Java 17.
+              s = re.sub(
+                  r'(sourceCompatibility\s*=?\s*)JavaVersion\.VERSION_1_8',
+                  r'\1JavaVersion.VERSION_17', s
+              )
+              s = re.sub(
+                  r'(targetCompatibility\s*=?\s*)JavaVersion\.VERSION_1_8',
+                  r'\1JavaVersion.VERSION_17', s
+              )
+
+              # If compileOptions is missing, add it inside android { }.
+              if not re.search(r'\bcompileOptions\s*\{', s):
+                  m = re.search(r'\bandroid\s*\{', s)
+                  if not m:
+                      raise SystemExit(f"ERROR: No android block in {p}")
+                  pos = m.end()
+                  if p.name.endswith(".kts"):
+                      block = """
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+          """
+                  else:
+                      block = """
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          """
+                  s = s[:pos] + block + s[pos:]
+
+              # Kotlin DSL/Groovy: update common Kotlin JVM target 1.8 to 17.
+              s = re.sub(
+                  r'jvmTarget\s*=\s*["\']1\.8["\']',
+                  'jvmTarget = "17"', s
+              )
+              s = re.sub(
+                  r'jvmTarget\s*=\s*["\']17["\']',
+                  'jvmTarget = "17"', s
+              )
+
+              p.write_text(s)
+              print("Updated:", p)
+
+          print("Java compatibility patch complete.")
+          PY
 
       - name: Build debug APK
         script: |
           set -e
-          PROJECT_FILE=$(find extracted -type f \( \
-            -name settings.gradle -o \
-            -name settings.gradle.kts \
-          \) | head -n 1)
+          PROJECT_FILE=$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
 
           if [ -z "$PROJECT_FILE" ]; then
-            echo "No Gradle project found. Check the package contents."
-            find extracted -maxdepth 5 -type f | head -200
+            echo "ERROR: Gradle settings file not found."
+            find extracted -maxdepth 6 -type f | head -200
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          echo "Building project at: $PROJECT_DIR"
           cd "$PROJECT_DIR"
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
 
@@ -50,8 +109,6 @@ workflows:
             chmod +x gradlew
             ./gradlew --no-daemon assembleDebug
           else
-            curl -L https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle.zip
-            unzip -q /tmp/gradle.zip -d /tmp
             /tmp/gradle-8.9/bin/gradle --no-daemon assembleDebug
           fi
 
